@@ -104,9 +104,9 @@ static u32 vcd_encode_start_in_open(struct vcd_clnt_ctxt_type_t *p_cctxt)
 		return VCD_ERR_BAD_STATE;
 	}
 
-	rc = vcd_sched_add_client(p_cctxt);
+	rc = vcd_add_client_to_sched(p_cctxt);
 
-	VCD_FAILED_RETURN(rc, "Failed: vcd_sched_add_client");
+	VCD_FAILED_RETURN(rc, "Failed: vcd_add_client_to_sched");
 
 	prop_hdr.prop_id = VCD_I_VOP_TIMING;
 	prop_hdr.n_size = sizeof(struct vcd_property_vop_timing_type);
@@ -224,10 +224,13 @@ static u32 vcd_pause_in_run(struct vcd_clnt_ctxt_type_t *p_cctxt)
 
 	VCD_MSG_LOW("vcd_pause_in_run:");
 
-	if (p_cctxt->sched_clnt_hdl) {
-		rc = vcd_sched_suspend_resume_clnt(p_cctxt, FALSE);
-		VCD_FAILED_RETURN(rc, "Failed: vcd_sched_suspend_resume_clnt");
+	if (p_cctxt->b_sched_clnt_valid) {
+		rc = vcd_map_sched_status(sched_suspend_resume_client
+					  (p_cctxt->p_dev_ctxt->sched_hdl,
+					   p_cctxt->sched_clnt_hdl, FALSE));
 	}
+
+	VCD_FAILED_RETURN(rc, "Failed: sched_suspend_resume_client");
 
 	if (p_cctxt->status.n_frame_submitted > 0) {
 		vcd_do_client_state_transition(p_cctxt,
@@ -265,7 +268,7 @@ static u32 vcd_resume_in_paused(struct vcd_clnt_ctxt_type_t *p_cctxt)
 
 	VCD_MSG_LOW("vcd_resume_in_paused:");
 
-	if (p_cctxt->sched_clnt_hdl) {
+	if (p_cctxt->b_sched_clnt_valid) {
 
 		rc = vcd_power_event(p_cctxt->p_dev_ctxt,
 				     p_cctxt, VCD_EVT_PWR_CLNT_RESUME);
@@ -274,11 +277,15 @@ static u32 vcd_resume_in_paused(struct vcd_clnt_ctxt_type_t *p_cctxt)
 			VCD_MSG_ERROR("VCD_EVT_PWR_CLNT_RESUME failed");
 		} else {
 
-			rc = vcd_sched_suspend_resume_clnt(p_cctxt, TRUE);
+			rc = vcd_map_sched_status(sched_suspend_resume_client
+						  (p_cctxt->p_dev_ctxt->
+						   sched_hdl,
+						   p_cctxt->sched_clnt_hdl,
+						   TRUE));
 			if (VCD_FAILED(rc)) {
 				VCD_MSG_ERROR
 				    ("rc = 0x%x. Failed: "
-				     "vcd_sched_suspend_resume_clnt",
+				     "sched_suspend_resume_client",
 				     rc);
 			}
 
@@ -513,7 +520,7 @@ static u32 vcd_set_property_cmn
 
 	case VCD_I_FRAME_RATE:
 		{
-			if (p_cctxt->sched_clnt_hdl) {
+			if (p_cctxt->b_sched_clnt_valid) {
 				rc = vcd_set_frame_rate(p_cctxt,
 					(struct vcd_property_frame_rate_type *)
 					p_prop_val);
@@ -524,7 +531,7 @@ static u32 vcd_set_property_cmn
 
 	case VCD_I_FRAME_SIZE:
 		{
-			if (p_cctxt->sched_clnt_hdl) {
+			if (p_cctxt->b_sched_clnt_valid) {
 				rc = vcd_set_frame_size(p_cctxt,
 					(struct vcd_property_frame_size_type *)
 					p_prop_val);
@@ -712,42 +719,10 @@ static u32 vcd_fill_output_buffer_cmn
      struct vcd_frame_data_type *p_buffer)
 {
 	u32 rc = VCD_S_SUCCESS;
-	struct vcd_buffer_entry_type *p_buf_entry;
-	u32 b_q_result = TRUE;
-	u32 b_handled = TRUE;
-
-	VCD_MSG_LOW("vcd_fill_output_buffer_cmn in %d:",
-		    p_cctxt->clnt_state.e_state);
-
-	p_buf_entry = vcd_check_fill_output_buffer(p_cctxt, p_buffer);
-	if (!p_buf_entry)
-		return VCD_ERR_BAD_POINTER;
-
-	if (!p_cctxt->status.b_first_op_frame_recvd) {
-		rc = vcd_handle_first_fill_output_buffer(p_cctxt, p_buffer,
-			&b_handled);
-		VCD_FAILED_RETURN(rc,
-			"Failed: VCD_HandleFirstFillOutputBuffer");
-		p_cctxt->status.b_first_op_frame_recvd = TRUE;
-		if (b_handled)
-			return rc ;
-	}
-
-	b_q_result =
-	    vcd_buffer_pool_entry_en_q(&p_cctxt->out_buf_pool, p_buf_entry);
-
-	if (!b_q_result && !p_cctxt->b_decoding) {
-		VCD_MSG_ERROR("Failed: vcd_buffer_pool_entry_en_q");
-
-		return VCD_ERR_FAIL;
-	}
-
-	p_buf_entry->frame = *p_buffer;
-	rc = vcd_return_op_buffer_to_hw(p_cctxt, p_buf_entry);
-	if (!VCD_FAILED(rc) && p_cctxt->sched_clnt_hdl) {
-		vcd_try_submit_frame(p_cctxt->p_dev_ctxt);
-		p_cctxt->sched_clnt_hdl->n_o_tkns++;
-	}
+	u32 b_handled = FALSE;
+	rc = vcd_return_op_buffer_to_hw(p_cctxt, p_buffer, &b_handled);
+	if (!b_handled && !VCD_FAILED(rc) && p_cctxt->b_sched_clnt_valid)
+			vcd_try_submit_frame(p_cctxt->p_dev_ctxt);
 	return rc;
 }
 
@@ -1417,9 +1392,11 @@ static void vcd_clnt_enter_eos(struct vcd_clnt_ctxt_type_t *p_cctxt,
    u32     rc;
 
    VCD_MSG_MED("Entering CLIENT_STATE_EOS on api %d", n_state_event_type);
-	rc = vcd_sched_suspend_resume_clnt(p_cctxt, FALSE);
+	rc = vcd_map_sched_status(sched_suspend_resume_client(
+			p_cctxt->p_dev_ctxt->sched_hdl,
+			p_cctxt->sched_clnt_hdl, FALSE));
 	if (VCD_FAILED(rc))
-		VCD_MSG_ERROR("Failed: vcd_sched_suspend_resume_clnt."
+		VCD_MSG_ERROR("Failed: sched_suspend_resume_client."
 					  "rc=0x%x", rc);
 }
 
@@ -1481,9 +1458,10 @@ static void vcd_clnt_exit_eos
 {
 	u32 rc;
 	VCD_MSG_MED("Exiting CLIENT_STATE_EOS on api %d", n_state_event_type);
-	rc = vcd_sched_suspend_resume_clnt(p_cctxt, TRUE);
+	rc = vcd_map_sched_status(sched_suspend_resume_client(
+		p_cctxt->p_dev_ctxt->sched_hdl, p_cctxt->sched_clnt_hdl, TRUE));
 	if (VCD_FAILED(rc))
-		VCD_MSG_ERROR("Failed: vcd_sched_suspend_resume_clnt. rc=0x%x",
+		VCD_MSG_ERROR("Failed: sched_suspend_resume_client. rc=0x%x",
 			rc);
 }
 

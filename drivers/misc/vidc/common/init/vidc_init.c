@@ -550,8 +550,7 @@ void  vidc_timer_start(void *p_timer_handle, u32 n_time_out)
 	struct vidc_timer *hw_timer = (struct vidc_timer *)p_timer_handle;
 	DBG("%s(): start timer\n ", __func__);
 	if (hw_timer) {
-        //hw_timer->hw_timeout.expires = jiffies + 1*HZ;	
-        hw_timer->hw_timeout.expires = jiffies + 10*HZ;	
+		hw_timer->hw_timeout.expires = jiffies + 1*HZ;
 		add_timer(&hw_timer->hw_timeout);
 	}
 }
