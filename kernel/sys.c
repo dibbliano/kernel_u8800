@@ -364,12 +364,9 @@ SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
 	int ret = 0;
 
 	/* We only trust the superuser with rebooting the system. */
-	//CONFIG_HUAWEI_OTA_UPDATE is not defined, so the code will be ignored
-#ifdef CONFIG_HUAWEI_OTA_UPDATE
 	if (!capable(CAP_SYS_BOOT))
 		return -EPERM;
-#endif
-    
+
 	/* For safety, we require "magic" arguments. */
 	if (magic1 != LINUX_REBOOT_MAGIC1 ||
 	    (magic2 != LINUX_REBOOT_MAGIC2 &&
@@ -877,7 +874,7 @@ change_okay:
 }
 
 /*
- * Samma på svenska..
+ * Samma pÃ¥ svenska..
  */
 SYSCALL_DEFINE1(setfsgid, gid_t, gid)
 {
@@ -1113,8 +1110,12 @@ SYSCALL_DEFINE0(setsid)
 	err = session;
 out:
 	write_unlock_irq(&tasklist_lock);
-	if (err > 0)
+	if (err > 0) {
 		proc_sid_connector(group_leader);
+#ifdef CONFIG_SCHED_AUTOGROUP
+sched_autogroup_create_attach(group_leader);
+#endif
+}
 	return err;
 }
 
@@ -1658,3 +1659,4 @@ int orderly_poweroff(bool force)
 	return ret;
 }
 EXPORT_SYMBOL_GPL(orderly_poweroff);
+
