@@ -916,12 +916,7 @@ static int copy_signal(unsigned long clone_flags, struct task_struct *tsk)
 
 	acct_init_pacct(&sig->pacct);
 
-	
-tty_audit_fork(sig);
-
-#ifdef CONFIG_SCHED_AUTOGROUP
-        sched_autogroup_fork(sig);
-#endif
+	tty_audit_fork(sig);
 
 	sig->oom_adj = current->signal->oom_adj;
 
@@ -932,9 +927,6 @@ void __cleanup_signal(struct signal_struct *sig)
 {
 	thread_group_cputime_free(sig);
 	tty_kref_put(sig->tty);
-#ifdef CONFIG_SCHED_AUTOGROUP
-        sched_autogroup_exit(sig);
-#endif
 	kmem_cache_free(signal_cachep, sig);
 }
 
@@ -1754,9 +1746,8 @@ bad_unshare_cleanup_vm:
 
 bad_unshare_cleanup_sigh:
 	if (new_sigh)
-		if (atomic_dec_and_test(&new_sigh->count)) {
-	    kmem_cache_free(sighand_cachep, new_sigh);
-	  }
+		if (atomic_dec_and_test(&new_sigh->count))
+			kmem_cache_free(sighand_cachep, new_sigh);
 
 bad_unshare_cleanup_fs:
 	if (new_fs)
@@ -1790,4 +1781,3 @@ int unshare_files(struct files_struct **displaced)
 	task_unlock(task);
 	return 0;
 }
-
